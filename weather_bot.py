@@ -63,7 +63,7 @@ def check_messages():
             print(f"오류: {e}")
         time.sleep(1)
 
-schedule.every().day.at("14:30").do(send_weather)
+schedule.every().day.at("14:40").do(send_weather)
 
 thread = threading.Thread(target=check_messages, daemon=True)
 thread.start()
