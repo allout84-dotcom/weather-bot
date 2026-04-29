@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # ========== 설정 ==========
 BOT_TOKEN = "8750895415:AAH6MGMctbF-hzW9SaOLyNJQ1vmnjKpcy5U"
-CHAT_IDS = ["1015266367", "-5270166958", "-2367716873"]  # ← 리스트로 변경
+CHAT_IDS = ["1015266367", "-5270166958", "-1002367716873"]  # ← 리스트로 변경
 WEATHER_API_KEY = "3c75b5933c9faf470b2d64265a03bc71"
 # ==========================
 
