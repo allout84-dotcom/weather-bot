@@ -67,7 +67,7 @@ def check_messages():
         time.sleep(1)
 
 # 매일 오후 7시 자동 전송
-schedule.every().day.at("19:00").do(send_weather)
+schedule.every().day.at("19:30").do(send_weather)
 
 # 메시지 감지 스레드 시작
 thread = threading.Thread(target=check_messages, daemon=True)
