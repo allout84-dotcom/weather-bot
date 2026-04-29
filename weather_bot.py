@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # ========== 설정 ==========
 BOT_TOKEN = "8750895415:AAH6MGMctbF-hzW9SaOLyNJQ1vmnjKpcy5U"
-CHAT_IDS = ["1015266367", "-5270166958"]  # ← 리스트로 변경
+CHAT_IDS = ["1015266367", "-5270166958", "-2367716873"]  # ← 리스트로 변경
 WEATHER_API_KEY = "3c75b5933c9faf470b2d64265a03bc71"
 # ==========================
 
@@ -63,7 +63,7 @@ def check_messages():
             print(f"오류: {e}")
         time.sleep(1)
 
-schedule.every().day.at("14:18").do(send_weather)
+schedule.every().day.at("14:30").do(send_weather)
 
 thread = threading.Thread(target=check_messages, daemon=True)
 thread.start()
