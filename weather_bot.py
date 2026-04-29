@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 # ========== 설정 ==========
 BOT_TOKEN = "8750895415:AAH6MGMctbF-hzW9SaOLyNJQ1vmnjKpcy5U"
-CHAT_ID = "1015266367"
+CHAT_ID = "1015266367", "-5270166958"
 WEATHER_API_KEY = "3c75b5933c9faf470b2d64265a03bc71"
 # ==========================
 
@@ -67,7 +67,7 @@ def check_messages():
         time.sleep(1)
 
 # 매일 오후 7시 자동 전송
-schedule.every().day.at("14:00").do(send_weather)
+schedule.every().day.at("14:13").do(send_weather)
 
 # 메시지 감지 스레드 시작
 thread = threading.Thread(target=check_messages, daemon=True)
