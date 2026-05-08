@@ -13,15 +13,15 @@ BOT_TOKEN       = "8750895415:AAH6MGMctbF-hzW9SaOLyNJQ1vmnjKpcy5U"
 CHAT_IDS        = ["1015266367", "-5270166958", "-1002367716873"]
 WEATHER_API_KEY = "3c75b5933c9faf470b2d64265a03bc71"
 SCHEDULE_URL    = "https://theminjoo.kr/main/sub/news/schedule.php"
-SCHEDULE_CHECK_INTERVAL = 180  # 3분마다 변경 체크
+SCHEDULE_CHECK_INTERVAL = 180
 # ==========================
 
-last_update_id  = 0
-schedule_state  = {}
-WEEKDAYS        = ["월", "화", "수", "목", "금", "토", "일"]
+last_update_id = 0
+schedule_state = {}
+WEEKDAYS       = ["월", "화", "수", "목", "금", "토", "일"]
 
-ITEM_RE   = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
-PERSON_RE = re.compile(r'.+(당대표|원내대표|비상대책위원장).+\d{4}-\d{2}-\d{2}')
+ITEM_RE        = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
+PERSON_KW      = ["당대표", "원내대표", "비상대책위원장"]
 
 
 # ──────────────────────────────────────────────
@@ -64,56 +64,84 @@ def send_weather():
 
 
 # ──────────────────────────────────────────────
-# 민주당 일정 — Playwright로 JS 렌더링 후 파싱
+# 민주당 일정 — Playwright
 # ──────────────────────────────────────────────
-def fetch_schedule_text(target: datetime) -> str:
-    url = (f"{SCHEDULE_URL}"
-           f"?year={target.year}&month={target.month:02d}&day={target.day:02d}")
+def get_html(url: str) -> str:
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage",
+                      "--disable-gpu", "--disable-setuid-sandbox"]
+            )
             ctx  = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
                 locale="ko-KR"
             )
             page = ctx.new_page()
-            page.goto(url, wait_until="networkidle", timeout=25000)
-            # 일정 카드가 로딩될 때까지 대기
+            page.goto(url, wait_until="networkidle", timeout=30000)
+            # 일정 항목(①)이 나타날 때까지 대기
             try:
-                page.wait_for_selector(".schedule-detail, .cal-view, .view-wrap, .day-schedule", timeout=8000)
+                page.wait_for_function(
+                    "document.body.innerText.includes('①')",
+                    timeout=10000
+                )
             except PWTimeout:
-                pass
+                print("[일정] ① 항목 대기 타임아웃 — 현재 HTML 사용")
             html = page.content()
             browser.close()
+            return html
     except Exception as e:
         print(f"[일정] 브라우저 오류: {e}")
         return ""
 
+
+def fetch_schedule_text(target: datetime) -> str:
+    url  = (f"{SCHEDULE_URL}"
+            f"?year={target.year}&month={target.month:02d}&day={target.day:02d}")
+    html = get_html(url)
+    if not html:
+        return ""
     return _parse(html, target)
 
 
 def _parse(html: str, target: datetime) -> str:
     soup = BeautifulSoup(html, "html.parser")
-
     for tag in soup.select("script, style, nav, header, footer, .gnb, .lnb, .header-wrap, .footer-wrap"):
         tag.decompose()
 
-    raw   = soup.get_text("\n", strip=True)
-    lines = [l.strip() for l in raw.split("\n") if l.strip()]
+    lines = [l.strip() for l in soup.get_text("\n", strip=True).split("\n") if l.strip()]
 
+    # ── 디버그: 관련 줄 출력 ──
+    print(f"[파싱 디버그] 전체 {len(lines)}줄")
+    for line in lines:
+        if any(kw in line for kw in PERSON_KW) or ITEM_RE.match(line):
+            print(f"  >> {line[:120]}")
+
+    # ── 블록 추출 ──
+    # 인물 헤더: PERSON_KW 포함 AND ① 로 시작하지 않는 줄
     blocks  = []
     current = None
+
     for line in lines:
-        if PERSON_RE.match(line):
-            header = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
+        is_person = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
+        is_item   = ITEM_RE.match(line)
+
+        if is_person:
+            # 날짜 부분 제거 (있으면)
+            header  = re.sub(r'\s*\d{4}[-./]\d{1,2}[-./]\d{1,2}.*', '', line).strip()
             current = {"header": header, "items": []}
             blocks.append(current)
-        elif current is not None and ITEM_RE.match(line):
+
+        elif is_item and current is not None:
             current["items"].append(line)
+
+    print(f"[파싱 디버그] 블록 수: {len(blocks)}, 항목 있는 블록: {sum(1 for b in blocks if b['items'])}")
 
     if not blocks or all(not b["items"] for b in blocks):
         return ""
 
+    # ── 메시지 조합 ──
     dow      = WEEKDAYS[target.weekday()]
     date_str = target.strftime(f"%Y년 %m월 %d일 ({dow})")
     out      = [f"📅 {date_str} 일정", "─" * 22]
@@ -141,8 +169,8 @@ def _diff_msg(old: str, new: str, target: datetime) -> str:
     date_str = target.strftime(f"%m월 %d일({dow})")
     old_items = {l.strip() for l in old.split("\n") if ITEM_RE.match(l.strip())}
     new_items = {l.strip() for l in new.split("\n") if ITEM_RE.match(l.strip())}
-    added     = sorted(new_items - old_items)
-    removed   = sorted(old_items - new_items)
+    added   = sorted(new_items - old_items)
+    removed = sorted(old_items - new_items)
     if not added and not removed:
         return ""
     out = [f"🔔 {date_str} 일정 변경", "─" * 22]
@@ -170,13 +198,13 @@ def check_schedule():
     prev = schedule_state.get(date_key)
 
     if prev is None:
-        print(f"[일정] {date_key} 최초 등록 → 전송")
+        print(f"[일정] {date_key} 최초 → 전송")
         send_message(text)
         schedule_state[date_key] = {"hash": h, "text": text}
     elif prev["hash"] != h:
         diff = _diff_msg(prev["text"], text, today)
         if diff:
-            print(f"[일정] {date_key} 변경 감지 → 전송")
+            print(f"[일정] {date_key} 변경 → 전송")
             send_message(diff)
         schedule_state[date_key] = {"hash": h, "text": text}
     else:
@@ -212,7 +240,7 @@ def check_messages():
                 text = update.get("message", {}).get("text", "")
                 if "열려라 날씨" in text:
                     send_weather()
-                elif "열려라 일정" in text or "오늘의 일정" in text or "오늘 일정" in text:
+                elif any(k in text for k in ["열려라 일정", "오늘의 일정", "오늘 일정"]):
                     result = fetch_schedule_text(datetime.now())
                     send_message(result if result else "오늘 등록된 일정이 없습니다.")
         except Exception as e:
