@@ -1,5 +1,1 @@
-[phases.build]
-cmds = ["pip install -r requirements.txt", "playwright install --with-deps chromium"]
 
-[phases.start]
-cmd = "python weather_bot.py"
