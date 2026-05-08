@@ -20,8 +20,8 @@ last_update_id = 0
 schedule_state = {}
 WEEKDAYS       = ["월", "화", "수", "목", "금", "토", "일"]
 
-ITEM_RE        = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
-PERSON_KW      = ["당대표", "원내대표", "비상대책위원장"]
+ITEM_RE   = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
+PERSON_KW = ["당대표", "원내대표", "비상대책위원장"]
 
 
 # ──────────────────────────────────────────────
@@ -64,7 +64,7 @@ def send_weather():
 
 
 # ──────────────────────────────────────────────
-# 민주당 일정 — Playwright
+# 민주당 일정 — Playwright + 날짜 정확히 필터링
 # ──────────────────────────────────────────────
 def get_html(url: str) -> str:
     try:
@@ -80,14 +80,12 @@ def get_html(url: str) -> str:
             )
             page = ctx.new_page()
             page.goto(url, wait_until="networkidle", timeout=30000)
-            # 일정 항목(①)이 나타날 때까지 대기
             try:
                 page.wait_for_function(
-                    "document.body.innerText.includes('①')",
-                    timeout=10000
+                    "document.body.innerText.includes('①')", timeout=10000
                 )
             except PWTimeout:
-                print("[일정] ① 항목 대기 타임아웃 — 현재 HTML 사용")
+                pass
             html = page.content()
             browser.close()
             return html
@@ -106,49 +104,54 @@ def fetch_schedule_text(target: datetime) -> str:
 
 
 def _parse(html: str, target: datetime) -> str:
+    """
+    핵심 로직:
+    - 인물 헤더 줄에 오늘 날짜(YYYY-MM-DD)가 포함된 블록만 수집
+    - 다른 날짜 헤더가 나오면 current를 None으로 초기화해서 항목 수집 중단
+    """
+    target_date = target.strftime("%Y-%m-%d")  # ex) "2026-05-08"
+
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup.select("script, style, nav, header, footer, .gnb, .lnb, .header-wrap, .footer-wrap"):
         tag.decompose()
 
     lines = [l.strip() for l in soup.get_text("\n", strip=True).split("\n") if l.strip()]
 
-    # ── 디버그: 관련 줄 출력 ──
-    print(f"[파싱 디버그] 전체 {len(lines)}줄")
-    for line in lines:
-        if any(kw in line for kw in PERSON_KW) or ITEM_RE.match(line):
-            print(f"  >> {line[:120]}")
-
-    # ── 블록 추출 ──
-    # 인물 헤더: PERSON_KW 포함 AND ① 로 시작하지 않는 줄
     blocks  = []
-    current = None
+    current = None  # 현재 수집 중인 블록 (None이면 수집 안 함)
 
     for line in lines:
-        is_person = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
-        is_item   = ITEM_RE.match(line)
+        is_person_line = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
+        is_item_line   = ITEM_RE.match(line)
 
-        if is_person:
-            # 날짜 부분 제거 (있으면)
-            header  = re.sub(r'\s*\d{4}[-./]\d{1,2}[-./]\d{1,2}.*', '', line).strip()
-            current = {"header": header, "items": []}
-            blocks.append(current)
+        if is_person_line:
+            if target_date in line:
+                # ✅ 오늘 날짜 헤더 → 수집 시작
+                header  = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
+                current = {"header": header, "items": []}
+                blocks.append(current)
+            else:
+                # ❌ 다른 날짜 헤더 → 수집 중단
+                current = None
 
-        elif is_item and current is not None:
+        elif is_item_line and current is not None:
             current["items"].append(line)
 
-    print(f"[파싱 디버그] 블록 수: {len(blocks)}, 항목 있는 블록: {sum(1 for b in blocks if b['items'])}")
+    # 항목이 있는 블록만 남김
+    blocks = [b for b in blocks if b["items"]]
 
-    if not blocks or all(not b["items"] for b in blocks):
+    print(f"[일정] {target_date} 해당 블록: {len(blocks)}개")
+    for b in blocks:
+        print(f"  - {b['header']} ({len(b['items'])}개 항목)")
+
+    if not blocks:
         return ""
 
-    # ── 메시지 조합 ──
     dow      = WEEKDAYS[target.weekday()]
     date_str = target.strftime(f"%Y년 %m월 %d일 ({dow})")
     out      = [f"📅 {date_str} 일정", "─" * 22]
 
     for block in blocks:
-        if not block["items"]:
-            continue
         emoji = "🟢" if "원내대표" in block["header"] else "🔵"
         out.append(f"\n{emoji} {block['header']}")
         for item in block["items"]:
