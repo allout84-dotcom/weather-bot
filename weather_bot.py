@@ -21,12 +21,10 @@ schedule_state = {}
 WEEKDAYS       = ["월", "화", "수", "목", "금", "토", "일"]
 
 ITEM_RE   = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
+DATE_RE   = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 PERSON_KW = ["당대표", "원내대표", "비상대책위원장"]
 
 
-# ──────────────────────────────────────────────
-# 텔레그램 전송
-# ──────────────────────────────────────────────
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     for chat_id in CHAT_IDS:
@@ -37,9 +35,6 @@ def send_message(text):
             print(f"전송 오류 ({chat_id}): {e}")
 
 
-# ──────────────────────────────────────────────
-# 날씨 (기존 유지)
-# ──────────────────────────────────────────────
 def get_tomorrow_weather():
     url = "https://api.openweathermap.org/data/2.5/forecast"
     params = {"lat": 37.5219, "lon": 126.9245,
@@ -63,9 +58,6 @@ def send_weather():
     send_message(get_tomorrow_weather())
 
 
-# ──────────────────────────────────────────────
-# 민주당 일정 — Playwright + 날짜 정확히 필터링
-# ──────────────────────────────────────────────
 def get_html(url: str) -> str:
     try:
         with sync_playwright() as p:
@@ -105,11 +97,19 @@ def fetch_schedule_text(target: datetime) -> str:
 
 def _parse(html: str, target: datetime) -> str:
     """
-    핵심 로직:
-    - 인물 헤더 줄에 오늘 날짜(YYYY-MM-DD)가 포함된 블록만 수집
-    - 다른 날짜 헤더가 나오면 current를 None으로 초기화해서 항목 수집 중단
+    페이지 구조:
+      정청래 당대표       ← 이름 줄 (PERSON_KW 포함)
+      2026-05-08         ← 날짜 줄 (별도 줄, DATE_RE 매칭)
+      ① 08:00 봉사활동   ← 항목
+      ② 09:00 회의
+      한병도 원내대표
+      2026-05-08
+      ① 09:00 ...
+
+    → 이름 줄 다음 줄이 오늘 날짜면 수집 시작
+    → 다른 날짜면 수집 안 함
     """
-    target_date = target.strftime("%Y-%m-%d")  # ex) "2026-05-08"
+    target_date = target.strftime("%Y-%m-%d")
 
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup.select("script, style, nav, header, footer, .gnb, .lnb, .header-wrap, .footer-wrap"):
@@ -118,31 +118,41 @@ def _parse(html: str, target: datetime) -> str:
     lines = [l.strip() for l in soup.get_text("\n", strip=True).split("\n") if l.strip()]
 
     blocks  = []
-    current = None  # 현재 수집 중인 블록 (None이면 수집 안 함)
+    current = None
+    pending_header = None  # 이름 줄을 임시 저장
 
     for line in lines:
-        is_person_line = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
-        is_item_line   = ITEM_RE.match(line)
+        is_person = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
+        is_date   = DATE_RE.match(line)
+        is_item   = ITEM_RE.match(line)
 
-        if is_person_line:
-            if target_date in line:
-                # ✅ 오늘 날짜 헤더 → 수집 시작
-                header  = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
-                current = {"header": header, "items": []}
+        if is_person:
+            # 이름 줄 → 다음 줄 날짜 확인 위해 임시 저장
+            pending_header = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
+            current = None  # 일단 수집 중단
+
+        elif is_date and pending_header:
+            # 날짜 줄 — 오늘 날짜면 수집 시작, 아니면 무시
+            if line == target_date:
+                current = {"header": pending_header, "items": []}
                 blocks.append(current)
             else:
-                # ❌ 다른 날짜 헤더 → 수집 중단
                 current = None
+            pending_header = None
 
-        elif is_item_line and current is not None:
+        elif is_item and current is not None:
             current["items"].append(line)
 
-    # 항목이 있는 블록만 남김
+        elif not is_person and not is_date and not is_item:
+            # 관계없는 줄 — pending_header 유지 (날짜 줄이 바로 안 올 수도 있으니)
+            pass
+
+    # 항목 있는 블록만
     blocks = [b for b in blocks if b["items"]]
 
-    print(f"[일정] {target_date} 해당 블록: {len(blocks)}개")
+    print(f"[일정] {target_date} 블록: {len(blocks)}개")
     for b in blocks:
-        print(f"  - {b['header']} ({len(b['items'])}개 항목)")
+        print(f"  - {b['header']} ({len(b['items'])}개)")
 
     if not blocks:
         return ""
@@ -161,9 +171,6 @@ def _parse(html: str, target: datetime) -> str:
     return "\n".join(out)
 
 
-# ──────────────────────────────────────────────
-# 변경 감지
-# ──────────────────────────────────────────────
 def _hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
@@ -228,9 +235,6 @@ def schedule_monitor_loop():
         time.sleep(SCHEDULE_CHECK_INTERVAL)
 
 
-# ──────────────────────────────────────────────
-# 명령어 처리
-# ──────────────────────────────────────────────
 def check_messages():
     global last_update_id
     while True:
@@ -251,9 +255,6 @@ def check_messages():
         time.sleep(1)
 
 
-# ──────────────────────────────────────────────
-# 시작
-# ──────────────────────────────────────────────
 schedule.every().day.at("08:58").do(send_weather)
 
 threading.Thread(target=check_messages,        daemon=True).start()
