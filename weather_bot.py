@@ -1,3 +1,4 @@
+import re
 import requests
 import schedule
 import time
@@ -16,8 +17,15 @@ SCHEDULE_CHECK_INTERVAL = 180  # 3분마다 변경 체크
 # ==========================
 
 last_update_id = 0
-schedule_state = {}  # 날짜별 일정 해시 저장 (메모리)
+schedule_state = {}  # {날짜: {"hash": ..., "text": ...}}
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
+
+# 일정 항목 패턴: ① ② ... 또는 1. 2. 또는 HH:MM 으로 시작하는 줄
+ITEM_PATTERN = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]|^\d{2}:\d{2}|^\d+\.')
+# 인물 헤더 패턴: "홍길동 당대표" 또는 "당대표" 단독
+PERSON_PATTERN = re.compile(r'(당대표|원내대표|비상대책위원장|대표)')
+# 네비게이션 노이즈 패턴 (제거 대상)
+NOISE_PATTERN  = re.compile(r'^(Home|2\d{3}년|0?\d월|\d{4}년\s*\d{2}월\s*\d{2}일|검색|전체메뉴|Skip|바로가기)$')
 
 
 # ──────────────────────────────────────────────
@@ -37,7 +45,7 @@ def send_message(text, parse_mode=None):
 
 
 # ──────────────────────────────────────────────
-# 날씨 기능 (기존)
+# 날씨 기능 (기존 유지)
 # ──────────────────────────────────────────────
 def get_tomorrow_weather():
     url = "https://api.openweathermap.org/data/2.5/forecast"
@@ -70,9 +78,12 @@ def send_weather():
 
 
 # ──────────────────────────────────────────────
-# 민주당 일정 기능 (신규)
+# 민주당 일정 크롤링 + 파싱
 # ──────────────────────────────────────────────
-def fetch_schedule(target: datetime) -> list:
+def fetch_schedule_text(target: datetime) -> str:
+    """
+    민주당 일정 페이지에서 당대표/원내대표 일정만 추출해 텍스트로 반환
+    """
     url = (f"{SCHEDULE_URL}"
            f"?year={target.year}&month={target.month:02d}&day={target.day:02d}")
     headers = {
@@ -83,144 +94,151 @@ def fetch_schedule(target: datetime) -> list:
     try:
         res = requests.get(url, headers=headers, timeout=15)
         res.encoding = "utf-8"
-        return _parse_schedule(res.text)
     except Exception as e:
         print(f"일정 요청 오류: {e}")
-        return []
+        return ""
+
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    # 불필요한 태그 제거
+    for tag in soup.select("script, style, nav, header, footer, "
+                           ".gnb, .lnb, .top-wrap, .header-wrap, "
+                           ".footer-wrap, .side, .util-nav"):
+        tag.decompose()
+
+    # 본문 영역 우선 탐색
+    main = (soup.find(id="main") or
+            soup.find("main") or
+            soup.find(id="container") or
+            soup.find(class_="contents") or
+            soup.body)
+
+    if not main:
+        return ""
+
+    raw_lines = [l.strip() for l in main.get_text("\n", strip=True).split("\n")
+                 if l.strip()]
+
+    return _extract_schedule_text(raw_lines, target)
 
 
-def _parse_schedule(html: str) -> list:
-    soup  = BeautifulSoup(html, "html.parser")
-    items = []
+def _extract_schedule_text(lines: list, target: datetime) -> str:
+    """
+    전체 텍스트 라인에서 일정 관련 블록만 추출
+    """
+    blocks   = []   # [{"header": "정청래 당대표", "items": [...]}]
+    current  = None
 
-    # selector 순서대로 시도
-    for sel in [".schedule-list li", ".cal-list li", ".day-list li",
-                ".schedule li", "ul.list li", ".schedule-wrap li",
-                ".detail-list li"]:
-        found = soup.select(sel)
-        if found:
-            for el in found:
-                text = el.get_text(strip=True)
-                if text and len(text) > 3:
-                    time_el  = el.find(class_=lambda c: c and "time"  in c)
-                    title_el = el.find(class_=lambda c: c and any(k in c for k in ("tit","subject","title")))
-                    place_el = el.find(class_=lambda c: c and any(k in c for k in ("place","loc","where")))
-                    items.append({
-                        "time":     time_el.get_text(strip=True)  if time_el  else "",
-                        "category": _detect_category(text),
-                        "title":    title_el.get_text(strip=True) if title_el else text[:80],
-                        "place":    place_el.get_text(strip=True) if place_el else ""
-                    })
-            break
+    for line in lines:
+        # 노이즈 제거
+        if NOISE_PATTERN.match(line):
+            continue
+        if len(line) < 2:
+            continue
 
-    # fallback: 테이블
-    if not items:
-        for row in soup.select("table tr"):
-            cols = row.find_all("td")
-            if len(cols) >= 2:
-                ev = cols[1].get_text(strip=True)
-                if ev and len(ev) > 2:
-                    items.append({
-                        "time":     cols[0].get_text(strip=True),
-                        "category": _detect_category(ev),
-                        "title":    ev,
-                        "place":    cols[2].get_text(strip=True) if len(cols) > 2 else ""
-                    })
-    return items
+        # 인물 헤더 감지 (예: "정청래 당대표 2026-05-08" 또는 "당대표" 단독)
+        if PERSON_PATTERN.search(line) and not ITEM_PATTERN.match(line):
+            # 날짜 문자열은 제거
+            header = re.sub(r'\d{4}-\d{2}-\d{2}', '', line).strip()
+            current = {"header": header, "items": []}
+            blocks.append(current)
+            continue
 
+        # 일정 항목 감지
+        if current is not None and ITEM_PATTERN.match(line):
+            current["items"].append(line)
 
-def _detect_category(text: str) -> str:
-    if "원내대표" in text: return "원내대표"
-    if "당대표"  in text:  return "당대표"
-    return "기타"
+    # 결과 조합
+    if not blocks:
+        return ""
 
-
-def _hash(items: list) -> str:
-    return hashlib.md5(
-        json.dumps(items, ensure_ascii=False, sort_keys=True).encode()
-    ).hexdigest()
-
-
-def _diff(old: list, new: list) -> dict:
-    def key(i): return f"{i['time']}|{i['title']}"
-    old_map = {key(i): i for i in old}
-    new_map = {key(i): i for i in new}
-    return {
-        "added":   [i for k, i in new_map.items() if k not in old_map],
-        "removed": [i for k, i in old_map.items() if k not in new_map]
-    }
-
-
-def _fmt_item(item: dict) -> str:
-    emoji = {"당대표": "🔵", "원내대표": "🟢"}.get(item["category"], "⚪")
-    t = f"{item['time']} " if item["time"]  else ""
-    p = f" 📍{item['place']}" if item["place"] else ""
-    return f"{emoji} {t}{item['title']}{p}"
-
-
-def fmt_full_schedule(items: list, target: datetime) -> str:
     dow      = WEEKDAYS[target.weekday()]
-    date_str = target.strftime(f"%Y년 %m월 %d일({dow})")
-    lines    = [f"📅 {date_str} 일정", "─" * 20]
-    if not items:
-        lines.append("등록된 일정이 없습니다.")
-    else:
-        groups = {}
-        for it in items:
-            groups.setdefault(it["category"], []).append(it)
-        for cat, cat_items in groups.items():
-            emoji = {"당대표": "🔵", "원내대표": "🟢"}.get(cat, "⚪")
-            lines.append(f"\n{emoji} [{cat}]")
-            for it in cat_items:
-                t = f"🕐{it['time']}  " if it["time"]  else ""
-                p = f"\n    📍{it['place']}" if it["place"] else ""
-                lines.append(f"  • {t}{it['title']}{p}")
-    lines.append(f"\n{SCHEDULE_URL}")
-    return "\n".join(lines)
+    date_str = target.strftime(f"%Y년 %m월 %d일 ({dow})")
+    result   = [f"📅 {date_str} 일정", "─" * 22]
+
+    for block in blocks:
+        if not block["items"]:
+            continue
+        # 인물 이모지
+        hdr = block["header"]
+        if "원내대표" in hdr:
+            emoji = "🟢"
+        elif "당대표" in hdr or "대표" in hdr:
+            emoji = "🔵"
+        else:
+            emoji = "⚪"
+        result.append(f"\n{emoji} {hdr}")
+        for item in block["items"]:
+            result.append(f"  {item}")
+
+    result.append(f"\n🔗 {SCHEDULE_URL}")
+    return "\n".join(result)
 
 
-def fmt_diff_schedule(diff: dict, target: datetime) -> str:
+# ──────────────────────────────────────────────
+# 변경 감지
+# ──────────────────────────────────────────────
+def _hash(text: str) -> str:
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def _make_diff_msg(old_text: str, new_text: str, target: datetime) -> str:
+    """변경 전후 비교 메시지 (줄 단위 diff)"""
     dow      = WEEKDAYS[target.weekday()]
     date_str = target.strftime(f"%m월 %d일({dow})")
-    lines    = [f"🔔 {date_str} 일정 변경", "─" * 20]
-    if diff["added"]:
+
+    old_lines = set(old_text.split("\n"))
+    new_lines = set(new_text.split("\n"))
+
+    added   = [l for l in new_lines - old_lines
+               if l.strip() and (ITEM_PATTERN.match(l.strip()) or PERSON_PATTERN.search(l))]
+    removed = [l for l in old_lines - new_lines
+               if l.strip() and (ITEM_PATTERN.match(l.strip()) or PERSON_PATTERN.search(l))]
+
+    if not added and not removed:
+        return ""
+
+    lines = [f"🔔 {date_str} 일정 변경", "─" * 22]
+    if added:
         lines.append("\n✅ 추가")
-        for it in diff["added"]:
-            lines.append(f"  {_fmt_item(it)}")
-    if diff["removed"]:
-        lines.append("\n❌ 삭제")
-        for it in diff["removed"]:
-            lines.append(f"  {_fmt_item(it)}")
-    lines.append(f"\n{SCHEDULE_URL}")
+        lines += [f"  {l.strip()}" for l in sorted(added)]
+    if removed:
+        lines.append("\n❌ 삭제/변경")
+        lines += [f"  {l.strip()}" for l in sorted(removed)]
+    lines.append(f"\n🔗 {SCHEDULE_URL}")
     return "\n".join(lines)
 
 
 def check_schedule_for(target: datetime):
     global schedule_state
     date_key = target.strftime("%Y-%m-%d")
-    items    = fetch_schedule(target)
-    h        = _hash(items)
-    prev     = schedule_state.get(date_key)
+    text     = fetch_schedule_text(target)
+
+    if not text:
+        print(f"[일정] {date_key} 내용 없음")
+        return
+
+    h    = _hash(text)
+    prev = schedule_state.get(date_key)
 
     if prev is None:
-        # 최초 감지 → 전체 전송
-        print(f"[일정] {date_key} 최초 등록 ({len(items)}개)")
-        send_message(fmt_full_schedule(items, target))
-        schedule_state[date_key] = {"hash": h, "items": items}
+        # 최초 → 전체 전송
+        print(f"[일정] {date_key} 최초 등록")
+        send_message(text)
+        schedule_state[date_key] = {"hash": h, "text": text}
 
     elif prev["hash"] != h:
-        # 변경 감지 → diff 전송
-        diff = _diff(prev["items"], items)
-        if diff["added"] or diff["removed"]:
-            print(f"[일정] {date_key} 변경 감지 추가={len(diff['added'])} 삭제={len(diff['removed'])}")
-            send_message(fmt_diff_schedule(diff, target))
-        schedule_state[date_key] = {"hash": h, "items": items}
+        # 변경 → diff 전송
+        diff_msg = _make_diff_msg(prev["text"], text, target)
+        if diff_msg:
+            print(f"[일정] {date_key} 변경 감지")
+            send_message(diff_msg)
+        schedule_state[date_key] = {"hash": h, "text": text}
     else:
         print(f"[일정] {date_key} 변경 없음")
 
 
 def schedule_monitor_loop():
-    """일정 모니터링 루프 (별도 스레드)"""
     print("[일정] 모니터링 스레드 시작")
     while True:
         try:
@@ -235,7 +253,7 @@ def schedule_monitor_loop():
 
 
 # ──────────────────────────────────────────────
-# 명령어 처리 (기존 + 신규)
+# 명령어 처리
 # ──────────────────────────────────────────────
 def check_messages():
     global last_update_id
@@ -252,8 +270,9 @@ def check_messages():
                     send_weather()
                 elif "열려라 일정" in text:
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] 즉시 일정 요청")
-                    today = datetime.now()
-                    send_message(fmt_full_schedule(fetch_schedule(today), today))
+                    today    = datetime.now()
+                    result   = fetch_schedule_text(today)
+                    send_message(result if result else "오늘 등록된 일정이 없습니다.")
         except Exception as e:
             print(f"메시지 확인 오류: {e}")
         time.sleep(1)
@@ -264,8 +283,7 @@ def check_messages():
 # ──────────────────────────────────────────────
 schedule.every().day.at("08:58").do(send_weather)
 
-# 스레드 시작
-threading.Thread(target=check_messages,      daemon=True).start()
+threading.Thread(target=check_messages,        daemon=True).start()
 threading.Thread(target=schedule_monitor_loop, daemon=True).start()
 
 print("봇 시작됨 ✅  (날씨 + 민주당 일정 모니터링)")
