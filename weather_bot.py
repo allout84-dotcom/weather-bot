@@ -13,7 +13,7 @@ BOT_TOKEN       = "8750895415:AAH6MGMctbF-hzW9SaOLyNJQ1vmnjKpcy5U"
 CHAT_IDS        = ["1015266367", "-5270166958", "-1002367716873"]
 WEATHER_API_KEY = "3c75b5933c9faf470b2d64265a03bc71"
 SCHEDULE_URL    = "https://theminjoo.kr/main/sub/news/schedule.php"
-SCHEDULE_CHECK_INTERVAL = 180
+SCHEDULE_CHECK_INTERVAL = 3600  # 1시간
 # ==========================
 
 last_update_id = 0
@@ -255,7 +255,22 @@ def check_messages():
         time.sleep(1)
 
 
-schedule.every().day.at("08:58").do(send_weather)
+def send_schedule_daily():
+    """매일 저녁 9시(KST) 최신 일정 전송"""
+    today  = datetime.now()
+    result = fetch_schedule_text(today)
+    if result:
+        send_message(result)
+        # 상태도 최신으로 갱신
+        schedule_state[today.strftime("%Y-%m-%d")] = {
+            "hash": _hash(result), "text": result
+        }
+        print(f"[일정] 저녁 9시 정기 전송 완료")
+    else:
+        print(f"[일정] 저녁 9시 정기 전송 — 일정 없음")
+
+schedule.every().day.at("08:30").do(send_weather)  # UTC 08:30 = KST 17:30
+schedule.every().day.at("12:00").do(send_schedule_daily)  # UTC 12:00 = KST 21:00
 
 threading.Thread(target=check_messages,        daemon=True).start()
 threading.Thread(target=schedule_monitor_loop, daemon=True).start()
