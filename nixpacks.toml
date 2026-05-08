@@ -1,5 +1,8 @@
-[phases.build]
-cmds = ["pip install -r requirements.txt"]
+[phases.setup]
+nixPkgs = ["python311", "chromium", "nss", "nspr", "atk", "cups", "libdrm", "gtk3", "pango", "cairo", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "mesa", "libxkbcommon", "at-spi2-atk", "at-spi2-core", "dbus"]
 
-[start]
+[phases.build]
+cmds = ["pip install -r requirements.txt", "playwright install chromium"]
+
+[phases.start]
 cmd = "python weather_bot.py"
