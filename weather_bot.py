@@ -256,18 +256,17 @@ def check_messages():
 
 
 def send_schedule_daily():
-    """매일 저녁 9시(KST) 최신 일정 전송"""
-    today  = datetime.now()
-    result = fetch_schedule_text(today)
+    """매일 저녁 9시(KST) 내일 일정 전송"""
+    tomorrow = datetime.now() + timedelta(days=1)
+    result   = fetch_schedule_text(tomorrow)
     if result:
         send_message(result)
-        # 상태도 최신으로 갱신
-        schedule_state[today.strftime("%Y-%m-%d")] = {
+        schedule_state[tomorrow.strftime("%Y-%m-%d")] = {
             "hash": _hash(result), "text": result
         }
-        print(f"[일정] 저녁 9시 정기 전송 완료")
+        print(f"[일정] 저녁 9시 정기 전송 완료 (내일 {tomorrow.strftime('%m/%d')} 일정)")
     else:
-        print(f"[일정] 저녁 9시 정기 전송 — 일정 없음")
+        print(f"[일정] 저녁 9시 정기 전송 — 내일 일정 없음")
 
 schedule.every().day.at("08:30").do(send_weather)  # UTC 08:30 = KST 17:30
 schedule.every().day.at("12:00").do(send_schedule_daily)  # UTC 12:00 = KST 21:00
