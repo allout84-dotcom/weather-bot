@@ -24,7 +24,13 @@ ITEM_RE   = re.compile(r'^[①②③④⑤⑥⑦⑧⑨⑩]')
 DATE_RE   = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 PERSON_KW = ["당대표", "원내대표", "비상대책위원장"]
 
+# 자동 감지된 현직 인물 캐시 {"당대표": "정청래 당대표", "원내대표": "한병도 원내대표"}
+known_leaders = {}
 
+
+# ──────────────────────────────────────────────
+# 텔레그램 전송
+# ──────────────────────────────────────────────
 def send_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     for chat_id in CHAT_IDS:
@@ -35,6 +41,9 @@ def send_message(text):
             print(f"전송 오류 ({chat_id}): {e}")
 
 
+# ──────────────────────────────────────────────
+# 날씨
+# ──────────────────────────────────────────────
 def get_tomorrow_weather():
     url = "https://api.openweathermap.org/data/2.5/forecast"
     params = {"lat": 37.5219, "lon": 126.9245,
@@ -58,6 +67,9 @@ def send_weather():
     send_message(get_tomorrow_weather())
 
 
+# ──────────────────────────────────────────────
+# HTML 가져오기
+# ──────────────────────────────────────────────
 def get_html(url: str) -> str:
     try:
         with sync_playwright() as p:
@@ -74,7 +86,8 @@ def get_html(url: str) -> str:
             page.goto(url, wait_until="networkidle", timeout=30000)
             try:
                 page.wait_for_function(
-                    "document.body.innerText.includes('①')", timeout=10000
+                    "document.body.innerText.includes('①') || document.body.innerText.includes('일정없음')",
+                    timeout=10000
                 )
             except PWTimeout:
                 pass
@@ -86,29 +99,65 @@ def get_html(url: str) -> str:
         return ""
 
 
+# ──────────────────────────────────────────────
+# 인물 캐시 업데이트
+# ──────────────────────────────────────────────
+def _update_known_leaders(lines: list):
+    """
+    페이지 텍스트에서 인물 헤더를 찾아 known_leaders 갱신
+    어떤 날짜든 상관없이 최신 인물 이름을 캐시에 저장
+    """
+    global known_leaders
+    for line in lines:
+        if any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line):
+            header = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
+            if not header:
+                continue
+            for kw in PERSON_KW:
+                if kw in header:
+                    if known_leaders.get(kw) != header:
+                        print(f"[인물] '{kw}' 감지: {known_leaders.get(kw, '(없음)')} → {header}")
+                    known_leaders[kw] = header
+                    break
+
+
+# ──────────────────────────────────────────────
+# 일정 없을 때 포맷 메시지
+# ──────────────────────────────────────────────
+def _fmt_no_schedule(target: datetime) -> str:
+    dow      = WEEKDAYS[target.weekday()]
+    date_str = target.strftime(f"%Y년 %m월 %d일 ({dow})")
+    out      = [f"📅 {date_str} 일정", "─" * 22]
+
+    # known_leaders에서 순서대로 출력 (당대표 → 원내대표 → 기타)
+    order = ["당대표", "원내대표", "비상대책위원장"]
+    shown = False
+    for kw in order:
+        if kw in known_leaders:
+            emoji = "🟢" if kw == "원내대표" else "🔵"
+            out.append(f"\n{emoji} {known_leaders[kw]}\n  일정 없음")
+            shown = True
+
+    if not shown:
+        out.append("\n일정 없음")
+
+    out.append(f"\n🔗 {SCHEDULE_URL}")
+    return "\n".join(out)
+
+
+# ──────────────────────────────────────────────
+# 일정 파싱
+# ──────────────────────────────────────────────
 def fetch_schedule_text(target: datetime) -> str:
     url  = (f"{SCHEDULE_URL}"
             f"?year={target.year}&month={target.month:02d}&day={target.day:02d}")
     html = get_html(url)
     if not html:
-        return ""
+        return _fmt_no_schedule(target)
     return _parse(html, target)
 
 
 def _parse(html: str, target: datetime) -> str:
-    """
-    페이지 구조:
-      정청래 당대표       ← 이름 줄 (PERSON_KW 포함)
-      2026-05-08         ← 날짜 줄 (별도 줄, DATE_RE 매칭)
-      ① 08:00 봉사활동   ← 항목
-      ② 09:00 회의
-      한병도 원내대표
-      2026-05-08
-      ① 09:00 ...
-
-    → 이름 줄 다음 줄이 오늘 날짜면 수집 시작
-    → 다른 날짜면 수집 안 함
-    """
     target_date = target.strftime("%Y-%m-%d")
 
     soup = BeautifulSoup(html, "html.parser")
@@ -117,9 +166,19 @@ def _parse(html: str, target: datetime) -> str:
 
     lines = [l.strip() for l in soup.get_text("\n", strip=True).split("\n") if l.strip()]
 
-    blocks  = []
-    current = None
-    pending_header = None  # 이름 줄을 임시 저장
+    # 인물 캐시 항상 업데이트 (날짜 무관)
+    _update_known_leaders(lines)
+
+    # 페이지에 "일정없음"만 있고 ① 항목 없으면 → 포맷 메시지
+    full_text = " ".join(lines)
+    if "일정없음" in full_text and "①" not in full_text:
+        print(f"[일정] {target_date} 페이지 '일정없음' 확인")
+        return _fmt_no_schedule(target)
+
+    # 오늘 날짜 블록 추출
+    blocks         = []
+    current        = None
+    pending_header = None
 
     for line in lines:
         is_person = any(kw in line for kw in PERSON_KW) and not ITEM_RE.match(line)
@@ -127,12 +186,10 @@ def _parse(html: str, target: datetime) -> str:
         is_item   = ITEM_RE.match(line)
 
         if is_person:
-            # 이름 줄 → 다음 줄 날짜 확인 위해 임시 저장
             pending_header = re.sub(r'\s*\d{4}-\d{2}-\d{2}.*', '', line).strip()
-            current = None  # 일단 수집 중단
+            current = None
 
         elif is_date and pending_header:
-            # 날짜 줄 — 오늘 날짜면 수집 시작, 아니면 무시
             if line == target_date:
                 current = {"header": pending_header, "items": []}
                 blocks.append(current)
@@ -143,19 +200,10 @@ def _parse(html: str, target: datetime) -> str:
         elif is_item and current is not None:
             current["items"].append(line)
 
-        elif not is_person and not is_date and not is_item:
-            # 관계없는 줄 — pending_header 유지 (날짜 줄이 바로 안 올 수도 있으니)
-            pass
-
-    # 항목 있는 블록만
-    blocks = [b for b in blocks if b["items"]]
-
     print(f"[일정] {target_date} 블록: {len(blocks)}개")
-    for b in blocks:
-        print(f"  - {b['header']} ({len(b['items'])}개)")
 
     if not blocks:
-        return ""
+        return _fmt_no_schedule(target)
 
     dow      = WEEKDAYS[target.weekday()]
     date_str = target.strftime(f"%Y년 %m월 %d일 ({dow})")
@@ -164,13 +212,19 @@ def _parse(html: str, target: datetime) -> str:
     for block in blocks:
         emoji = "🟢" if "원내대표" in block["header"] else "🔵"
         out.append(f"\n{emoji} {block['header']}")
-        for item in block["items"]:
-            out.append(f"  {item}")
+        if block["items"]:
+            for item in block["items"]:
+                out.append(f"  {item}")
+        else:
+            out.append("  일정 없음")
 
     out.append(f"\n🔗 {SCHEDULE_URL}")
     return "\n".join(out)
 
 
+# ──────────────────────────────────────────────
+# 변경 감지
+# ──────────────────────────────────────────────
 def _hash(text: str) -> str:
     return hashlib.md5(text.encode()).hexdigest()
 
@@ -201,7 +255,6 @@ def check_schedule():
     text     = fetch_schedule_text(today)
 
     if not text:
-        print(f"[일정] {date_key} 내용 없음")
         return
 
     h    = _hash(text)
@@ -235,6 +288,18 @@ def schedule_monitor_loop():
         time.sleep(SCHEDULE_CHECK_INTERVAL)
 
 
+def send_schedule_daily():
+    """매일 저녁 9시(KST) 내일 일정 전송"""
+    tomorrow = datetime.now() + timedelta(days=1)
+    result   = fetch_schedule_text(tomorrow)
+    if result:
+        send_message(result)
+        schedule_state[tomorrow.strftime("%Y-%m-%d")] = {
+            "hash": _hash(result), "text": result
+        }
+        print(f"[일정] 저녁 9시 정기 전송 완료 (내일 {tomorrow.strftime('%m/%d')} 일정)")
+
+
 def check_messages():
     global last_update_id
     while True:
@@ -249,26 +314,16 @@ def check_messages():
                     send_weather()
                 elif any(k in text for k in ["열려라 일정", "오늘의 일정", "오늘 일정"]):
                     result = fetch_schedule_text(datetime.now())
-                    send_message(result if result else "오늘 등록된 일정이 없습니다.")
+                    send_message(result)
         except Exception as e:
             print(f"메시지 확인 오류: {e}")
         time.sleep(1)
 
 
-def send_schedule_daily():
-    """매일 저녁 9시(KST) 내일 일정 전송"""
-    tomorrow = datetime.now() + timedelta(days=1)
-    result   = fetch_schedule_text(tomorrow)
-    if result:
-        send_message(result)
-        schedule_state[tomorrow.strftime("%Y-%m-%d")] = {
-            "hash": _hash(result), "text": result
-        }
-        print(f"[일정] 저녁 9시 정기 전송 완료 (내일 {tomorrow.strftime('%m/%d')} 일정)")
-    else:
-        print(f"[일정] 저녁 9시 정기 전송 — 내일 일정 없음")
-
-schedule.every().day.at("08:30").do(send_weather)  # UTC 08:30 = KST 17:30
+# ──────────────────────────────────────────────
+# 시작
+# ──────────────────────────────────────────────
+schedule.every().day.at("08:30").do(send_weather)         # UTC 08:30 = KST 17:30
 schedule.every().day.at("12:00").do(send_schedule_daily)  # UTC 12:00 = KST 21:00
 
 threading.Thread(target=check_messages,        daemon=True).start()
