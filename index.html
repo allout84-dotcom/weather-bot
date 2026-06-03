@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>제9회 지방선거 개표시간 예측 프로그램</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --navy:#0a2342;
+    --navy2:#14365e;
+    --blue:#1a4f8a;
+    --accent:#2f6fb0;
+    --gold:#c8a24a;
+    --red:#d92121;
+    --redbg:#fdecec;
+    --ink:#0d1b2a;
+    --paper:#f4f1ea;
+    --line:#d8d2c4;
+    --win:#0a2342;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Nanum Gothic',sans-serif!important;font-weight:700!important;}
+  b,strong{font-weight:800!important;}
+  body{
+    font-family:'Nanum Gothic',sans-serif;
+    background:
+      radial-gradient(circle at 12% 8%, rgba(47,111,176,.12), transparent 40%),
+      radial-gradient(circle at 88% 92%, rgba(200,162,74,.10), transparent 42%),
+      var(--paper);
+    color:var(--ink);
+    padding:24px 14px 60px;
+    min-height:100vh;
+  }
+  html,body{max-width:100%;overflow-x:hidden;}
+  .wrap{max-width:1180px;margin:0 auto;}
+  header.hero{
+    background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 60%,var(--blue) 100%);
+    color:#fff;border-radius:18px;padding:24px 32px;position:relative;overflow:hidden;
+    box-shadow:0 18px 40px -18px rgba(10,35,66,.6);
+  }
+  header.hero::after{
+    content:"";position:absolute;right:-40px;top:-40px;width:220px;height:220px;
+    background:radial-gradient(circle,rgba(200,162,74,.35),transparent 70%);
+  }
+  .eyebrow{font-size:13px;letter-spacing:3px;color:var(--gold);font-weight:600;}
+  header.hero h1{font-family:'Nanum Gothic',sans-serif;font-size:32px;line-height:1.2;margin-top:6px;letter-spacing:0;}
+  header.hero p{margin-top:10px;font-size:14px;color:#cdd8e6;max-width:640px;line-height:1.6;}
+  .legend{display:flex;gap:18px;margin-top:18px;flex-wrap:wrap;font-size:12.5px;color:#dde6f0;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+
+  .panel{background:#fff;border:1px solid var(--line);border-radius:16px;margin-top:26px;overflow:hidden;
+    box-shadow:0 10px 30px -22px rgba(10,35,66,.4);}
+  .panel-head{background:var(--navy);color:#fff;padding:13px 20px;font-family:'Black Han Sans',sans-serif;
+    font-size:17px;letter-spacing:.5px;display:flex;align-items:center;gap:10px;}
+  .panel-head .tag{background:var(--gold);color:var(--navy);font-family:'IBM Plex Sans KR';font-weight:700;
+    font-size:11px;padding:2px 9px;border-radius:20px;}
+
+  .tbl-scroll{overflow-x:auto;}
+  table.input{width:100%;border-collapse:collapse;min-width:860px;}
+  table.input th{
+    background:var(--navy2);color:#fff;font-size:12.5px;font-weight:600;padding:11px 8px;
+    border:1px solid #1f3f63;white-space:nowrap;position:sticky;top:0;
+  }
+  table.input th.dem{background:#15457a;}
+  table.input th.ppp{background:#7a1520;}
+  table.input td{border:1px solid var(--line);padding:6px 7px;text-align:center;background:#fff;}
+  table.input td.region{font-family:'Black Han Sans',sans-serif;font-size:14px;color:var(--navy);
+    background:#f7f4ed;white-space:nowrap;letter-spacing:.5px;}
+  table.input td.voters{font-size:11.5px;color:#5a6472;background:#fafaf7;white-space:nowrap;}
+  table.input input{width:100%;border:1px solid var(--line);border-radius:7px;padding:7px 6px;
+    font-family:'IBM Plex Sans KR';font-size:13px;text-align:center;background:#fff;color:var(--ink);}
+  table.input input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(47,111,176,.18);}
+  table.input input.name{text-align:left;}
+  td.gap{font-family:'Black Han Sans';font-size:15px;color:var(--navy);background:#f2f5fa;white-space:nowrap;}
+  td.gap.close{color:var(--red);background:var(--redbg);}
+  .nm-dem{color:#15457a;}
+  .nm-ppp{color:#7a1520;}
+
+  .runbar{display:flex;justify-content:center;margin:30px 0 6px;}
+  button.run{
+    font-family:'Black Han Sans',sans-serif;font-size:19px;letter-spacing:1px;
+    background:linear-gradient(135deg,var(--navy),var(--blue));color:#fff;border:none;
+    padding:16px 46px;border-radius:50px;cursor:pointer;box-shadow:0 14px 28px -12px rgba(10,35,66,.7);
+    transition:transform .12s ease,box-shadow .12s ease;
+  }
+  button.run:hover{transform:translateY(-2px);box-shadow:0 18px 32px -12px rgba(10,35,66,.8);}
+  button.run:active{transform:translateY(0);}
+
+  /* results */
+  table.result{width:100%;border-collapse:collapse;min-width:760px;}
+  table.result th{background:var(--navy2);color:#fff;font-size:12.5px;padding:11px 8px;border:1px solid #1f3f63;white-space:nowrap;}
+  table.result td{border:1px solid var(--line);padding:10px 9px;text-align:center;font-size:13px;}
+  table.result td.rank{font-family:'Black Han Sans';color:var(--gold);background:var(--navy);font-size:14px;width:46px;}
+  table.result td.region{font-family:'Black Han Sans';font-size:14px;color:var(--navy);background:#f7f4ed;white-space:nowrap;}
+  table.result td.cand{text-align:left;font-size:12.5px;line-height:1.5;}
+  table.result td.gapc{font-family:'Black Han Sans';font-size:15px;color:var(--navy);}
+  table.result td.t-win{font-family:'IBM Plex Sans KR';font-weight:700;}
+  .t1{color:var(--accent);}
+  .t2{color:var(--blue);}
+  .t3{color:var(--win);}
+  tr.close-row td{background:var(--redbg)!important;}
+  tr.close-row td.gapc{color:var(--red);}
+  tr.close-row td.region{background:#f8dcdc!important;color:var(--red);}
+  .badge-close{display:inline-block;background:var(--red);color:#fff;font-size:10.5px;font-weight:700;
+    padding:2px 8px;border-radius:20px;margin-left:6px;vertical-align:middle;}
+  .empty{padding:34px;text-align:center;color:#8a8472;font-size:14px;}
+  .note{font-size:11.5px;color:#7a7464;margin-top:14px;line-height:1.7;padding:0 4px;}
+  .clock{font-variant-numeric:tabular-nums;}
+  @media(max-width:640px){
+    body{padding:16px 10px 50px;}
+    header.hero{padding:20px 18px;}
+    header.hero h1{font-size:24px;}
+    .panel-head{font-size:15px;padding:11px 15px;}
+
+    /* 가로 스크롤 제거 */
+    .tbl-scroll{overflow-x:visible;}
+    table.input,table.result{min-width:0;width:100%;display:block;}
+    table.input thead,table.result thead{display:none;} /* 헤더 숨김 → 셀마다 라벨로 대체 */
+    table.input tbody,table.result tbody{display:block;}
+
+    /* 각 행을 카드로 */
+    table.input tr,table.result tr{
+      display:block;margin:0 8px 12px;border:1px solid var(--line);
+      border-radius:12px;overflow:hidden;background:#fff;
+      box-shadow:0 4px 14px -10px rgba(10,35,66,.4);
+    }
+    /* 각 셀: 좌측 라벨 + 우측 값 */
+    table.input td,table.result td{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      border:none;border-bottom:1px solid #eee;padding:9px 13px;text-align:right;
+    }
+    table.input tr td:last-child,table.result tr td:last-child{border-bottom:none;}
+    table.input td::before,table.result td::before{
+      content:attr(data-label);text-align:left;color:#5a6472;font-size:12px;
+      flex:0 0 auto;min-width:44%;
+    }
+    /* 입력칸은 우측에서 폭 확보 */
+    table.input td input{width:auto;flex:1 1 auto;max-width:60%;}
+    table.input td.region,table.result td.region{
+      background:var(--navy);color:#fff;font-size:15px;justify-content:flex-start;
+    }
+    table.input td.region::before,table.result td.region::before{color:#cdd8e6;}
+    table.result td.rank{background:var(--navy2);color:var(--gold);}
+    table.result td.cand{text-align:right;flex-wrap:wrap;}
+    table.result td.cand::before{align-self:flex-start;}
+    .empty{padding:24px 14px;}
+
+    /* 빈 결과 메시지는 라벨 없이 */
+    table.result tr:has(td.empty){border:none;box-shadow:none;margin:0;background:transparent;}
+    table.result td.empty{display:block;text-align:center;border:none;padding:24px 14px;}
+    table.result td.empty::before{display:none;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">제9회 전국동시지방선거 · 2026.6.3</div>
+    <h1>시·도지사 개표시간 예측 프로그램</h1>
+  </header>
+
+  <section class="panel">
+    <div class="panel-head"><span class="tag">입력</span> 시·도별 후보 · 예상득표율</div>
+    <div class="tbl-scroll">
+      <table class="input">
+        <thead>
+          <tr>
+            <th>시·도</th>
+            <th>확정 선거인수</th>
+            <th class="dem">민주당 후보</th>
+            <th class="dem">예상득표율(%)</th>
+            <th class="ppp">국민의힘 / 무소속 후보</th>
+            <th class="ppp">예상득표율(%)</th>
+            <th>격차(%p)</th>
+          </tr>
+        </thead>
+        <tbody id="ibody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="runbar">
+    <button class="run" onclick="calculate()">⏱ 예상 개표시간 산출</button>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head"><span class="tag">출력</span> 예상 개표시간 (개표 빠른 순)</div>
+    <div class="tbl-scroll">
+      <table class="result">
+        <thead>
+          <tr><th>순위</th><th>시·도</th><th>후보 / 예상득표율</th><th>격차</th>
+              <th>유력</th><th>확실</th><th>당선</th></tr>
+        </thead>
+        <tbody id="rbody">
+          <tr><td colspan="7" class="empty">후보·득표율을 입력한 뒤 <b>예상 개표시간 산출</b> 버튼을 눌러주세요.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      ※ 산출 모형은 업로드된 예측 데이터(격차–콜타임 관계)와 시·도별 확정 선거인수를 회귀 분석하여 도출한 추정치입니다.<br>
+      ※ 기준 시각: 투표 마감 18:00. 24시 이후 시각은 익일(翌日)로 표기됩니다. 격차가 작을수록 개표시간이 급격히 늦어집니다.
+    </div>
+  </section>
+</div>
+
+<script>
+// 고정 지역 + 확정 선거인수(괄호 숫자 제외). 광주전남·전북전남은 사용자 지정 묶음.
+const REGIONS = [
+  {key:'서울',     v:8319134,          dem:'정원오', ppp:'오세훈'},
+  {key:'부산',     v:2857335,          dem:'전재수', ppp:'박형준'},
+  {key:'대구',     v:2049683,          dem:'김부겸', ppp:'추경호'},
+  {key:'인천',     v:2663459,          dem:'박찬대', ppp:'유정복'},
+  {key:'광주전남', v:1189519+1558206,  dem:'민형배', ppp:'이정현'},  // 광주 1,189,519 + 전남 1,558,206
+  {key:'대전',     v:1250891,          dem:'허태정', ppp:'이장우'},
+  {key:'울산',     v:936171,           dem:'김상욱', ppp:'김두겸'},
+  {key:'세종',     v:309134,           dem:'조상호', ppp:'최민호'},
+  {key:'경기',     v:11878997,         dem:'추미애', ppp:'양향자'},
+  {key:'강원',     v:1329742,          dem:'우상호', ppp:'김진태'},
+  {key:'충북',     v:1396588,          dem:'신용한', ppp:'김영환'},
+  {key:'충남',     v:1857239,          dem:'박수현', ppp:'김태흠'},
+  {key:'전북',     v:1509854,          dem:'이원택', ppp:'김관영'},  // 전북 1,509,854
+  {key:'경북',     v:2202861,          dem:'오중기', ppp:'이철우'},
+  {key:'경남',     v:2775745,          dem:'김경수', ppp:'박완수'},
+  {key:'제주',     v:565350,           dem:'위성곤', ppp:'문성유'},
+];
+
+// 회귀계수 [g, ln(g+1), voters/1e6, 1/(g+0.5), const]  → 18:00 이후 경과 분(min)
+const MODEL = {
+  유력:[4.1813,-199.0186,1.151 ,-19.3037,675.7382],
+  확실:[3.6175,-206.0934,0.158 ,-27.4643,800.5637],
+  당선:[2.9998,-205.4783,0.1811,-93.2181,934.4278],
+};
+
+function fmtV(n){return n.toLocaleString('ko-KR');}
+
+function buildRows(){
+  const tb=document.getElementById('ibody');
+  REGIONS.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`
+      <td class="region" data-label="시·도">${r.key}</td>
+      <td class="voters" data-label="확정 선거인수">${fmtV(r.v)}</td>
+      <td data-label="민주당 후보"><input class="name nm-dem" id="dn${i}" value="${r.dem}" placeholder="민주당 후보"></td>
+      <td data-label="민주당 득표율(%)"><input type="number" step="0.1" id="dr${i}" placeholder="0.0" oninput="updGap(${i})"></td>
+      <td data-label="국민의힘/무소속 후보"><input class="name nm-ppp" id="pn${i}" value="${r.ppp}" placeholder="국민의힘/무소속 후보"></td>
+      <td data-label="상대 득표율(%)"><input type="number" step="0.1" id="pr${i}" placeholder="0.0" oninput="updGap(${i})"></td>
+      <td class="gap" id="gp${i}" data-label="격차(%p)">–</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+function getGap(i){
+  const d=parseFloat(document.getElementById('dr'+i).value);
+  const p=parseFloat(document.getElementById('pr'+i).value);
+  if(isNaN(d)||isNaN(p))return null;
+  return Math.abs(d-p);
+}
+
+function updGap(i){
+  const cell=document.getElementById('gp'+i);
+  const g=getGap(i);
+  if(g===null){cell.textContent='–';cell.classList.remove('close');return;}
+  cell.textContent=g.toFixed(1)+'%p';
+  cell.classList.toggle('close', g<=3);
+}
+
+function minToClock(min){
+  let total=18*60+Math.round(min);
+  let day = total>=24*60 ? '익일 ' : '';
+  total%=24*60;
+  const h=String(Math.floor(total/60)).padStart(2,'0');
+  const m=String(total%60).padStart(2,'0');
+  return day+h+':'+m;
+}
+
+// 단계별로 시간이 최소가 되는 격차(최저점). 이 값을 넘는 격차는 최저점 값으로 고정(클램프)하여
+// "격차가 커질수록 개표시간이 늘어나는" 회귀 모형의 외삽 오류를 제거한다.
+const CLAMP = {유력:46.5, 확실:55.8, 당선:66.9};
+
+function predict(stage,g,v){
+  const c=MODEL[stage];
+  // 최저점 이상 격차는 최저점 격차로 대체 → 더 큰 격차에서도 시간이 늘지 않음(단조 감소 보장)
+  const ge = Math.min(g, CLAMP[stage]);
+  return c[0]*ge + c[1]*Math.log(ge+1) + c[2]*(v/1e6) + c[3]*(1/(ge+0.5)) + c[4];
+}
+
+function calculate(){
+  const rows=[];
+  REGIONS.forEach((r,i)=>{
+    const g=getGap(i);
+    if(g===null)return;
+    const dn=document.getElementById('dn'+i).value.trim()||'민주당';
+    const pn=document.getElementById('pn'+i).value.trim()||'국민의힘/무소속';
+    const dr=parseFloat(document.getElementById('dr'+i).value);
+    const pr=parseFloat(document.getElementById('pr'+i).value);
+    let t1=predict('유력',g,r.v), t2=predict('확실',g,r.v), t3=predict('당선',g,r.v);
+    // 단조성 보정: 유력 < 확실 < 당선
+    t2=Math.max(t2,t1+15); t3=Math.max(t3,t2+15);
+    const lead = dr>=pr ? {n:dn,r:dr,cls:'nm-dem'} : {n:pn,r:pr,cls:'nm-ppp'};
+    const trail= dr>=pr ? {n:pn,r:pr,cls:'nm-ppp'} : {n:dn,r:dr,cls:'nm-dem'};
+    rows.push({region:r.key,g,lead,trail,t1,t2,t3,close:g<=3});
+  });
+
+  const tb=document.getElementById('rbody');
+  if(rows.length===0){
+    tb.innerHTML='<tr><td colspan="7" class="empty">입력된 지역이 없습니다. 양당 예상득표율을 입력해 주세요.</td></tr>';
+    return;
+  }
+  rows.sort((a,b)=>a.t1-b.t1); // 개표 빠른 순 = 당선 콜 빠른 순 기준은 유력 기준 정렬
+  rows.sort((a,b)=>a.t3-b.t3); // 최종: 당선 확정 빠른 순
+  tb.innerHTML='';
+  rows.forEach((x,idx)=>{
+    const tr=document.createElement('tr');
+    if(x.close)tr.className='close-row';
+    tr.innerHTML=`
+      <td class="rank" data-label="순위">${idx+1}</td>
+      <td class="region" data-label="시·도">${x.region}</td>
+      <td class="cand" data-label="후보 / 예상득표율">
+        <span class="${x.lead.cls}"><b>${x.lead.n}</b> ${x.lead.r.toFixed(1)}%</span><br>
+        <span class="${x.trail.cls}">${x.trail.n} ${x.trail.r.toFixed(1)}%</span>
+      </td>
+      <td class="gapc" data-label="격차">${x.g.toFixed(1)}%p${x.close?'<span class="badge-close">경합</span>':''}</td>
+      <td class="t-win t1 clock" data-label="유력">${minToClock(x.t1)}</td>
+      <td class="t-win t2 clock" data-label="확실">${minToClock(x.t2)}</td>
+      <td class="t-win t3 clock" data-label="당선">${minToClock(x.t3)}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+buildRows();
+</script>
+</body>
+</html>
