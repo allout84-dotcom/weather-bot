@@ -1,5 +1,0 @@
-requests
-schedule
-beautifulsoup4
-lxml
-playwright
